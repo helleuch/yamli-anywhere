@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Yamli Anywhere",
+  "version": "0.3.0",
+  "description": "Smart Arabic transliteration in text fields, including annotation tools such as Label Studio.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Yamli Anywhere",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "toggle-yamli": {
+      "suggested_key": {
+        "default": "Alt+Shift+A",
+        "mac": "Alt+Shift+A"
+      },
+      "description": "Toggle Yamli Anywhere"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}

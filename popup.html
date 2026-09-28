@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Yamli Anywhere</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="logo">ي</div>
+      <div>
+        <h1>Yamli Anywhere</h1>
+        <p>Arabic transliteration · Yamli SXHR</p>
+      </div>
+    </header>
+
+    <label class="toggle-row">
+      <span>Enabled</span>
+      <input id="enabled" type="checkbox">
+    </label>
+
+    <section>
+      <div class="label">CURRENT PAGE</div>
+      <div id="pageStatus" class="status">Checking…</div>
+      <button id="inject" type="button">Enable on this page</button>
+    </section>
+
+    <section>
+      <div class="label">YAMLI API</div>
+      <div id="apiStatus" class="status">Not tested yet</div>
+      <button id="testApi" type="button">Test with “salam”</button>
+    </section>
+
+    <div class="hint">
+      When working, typing <b>salam</b> should show candidates.
+      Press <b>Space</b> to accept the first one.
+    </div>
+
+    <footer>
+      Shortcut: <b>Alt + Shift + A</b>
+    </footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
