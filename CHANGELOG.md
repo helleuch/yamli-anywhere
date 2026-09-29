@@ -1,11 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Added the original Latin input as the first candidate, matching Yamli's code-switching workflow.
+- The first Arabic candidate is still highlighted by default, so Space transliterates normally.
+- Clicking the Latin candidate keeps the word in Latin script.
+- Number keys 1–9 select Arabic candidates.
+
 ## 0.3.0
 
-- Reproduces the legacy SXHR protocol used by the working Yamli web client.
-- Uses Yamli build `5515` and parses its nested response format.
-- Adds ranked transliteration candidates.
-- Adds toolbar on/off control and `Alt+Shift+A` shortcut.
-- Adds diagnostics for page injection and Yamli connectivity.
-- Adds support for standard text fields, React-controlled inputs,
-  `contenteditable`, `role="textbox"`, and nested frames.
+- Added working Yamli SXHR transliteration support.

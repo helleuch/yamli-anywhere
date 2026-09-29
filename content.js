@@ -19,6 +19,7 @@
     serial: 0,
     debounce: null,
     apiErrorShown: false,
+    latinBypass: null,
     readyAt: Date.now()
   };
 
@@ -297,6 +298,36 @@
   }
   globalThis.__yamliAnywhereV2ShowToast = showToast;
 
+  function markLatinAsChosen(ctx) {
+    if (!ctx) return;
+    STATE.latinBypass = {
+      kind: ctx.kind,
+      el: ctx.el,
+      node: ctx.node || null,
+      word: ctx.word,
+      start: ctx.start,
+      end: ctx.end
+    };
+  }
+
+  function latinBypassStillValid(el) {
+    const b = STATE.latinBypass;
+    if (!b || b.el !== el || !b.el?.isConnected) return false;
+
+    if (b.kind === "control") {
+      const pos = b.el.selectionStart;
+      return pos === b.end &&
+             b.el.value.slice(b.start, b.end) === b.word;
+    }
+
+    if (b.kind === "contenteditable") {
+      return !!b.node?.isConnected &&
+             b.node.textContent.slice(b.start, b.end) === b.word;
+    }
+
+    return false;
+  }
+
   function hidePopup() {
     STATE.candidates = [];
     STATE.selectedIndex = 0;
@@ -354,7 +385,7 @@
 
     STATE.list.replaceChildren();
 
-    STATE.candidates.slice(0, 9).forEach((candidate, index) => {
+    STATE.candidates.slice(0, 10).forEach((candidate, index) => {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "yamli-anywhere-candidate" +
@@ -363,20 +394,30 @@
 
       const num = document.createElement("span");
       num.className = "yamli-anywhere-number";
-      num.textContent = String(index + 1);
+      // Latin stays unnumbered; Arabic candidates are numbered 1–9.
+      num.textContent = index === 0 ? "" : String(index);
 
-      const arabic = document.createElement("span");
-      arabic.className = "yamli-anywhere-arabic";
-      arabic.dir = "rtl";
-      arabic.textContent = candidate;
+      const text = document.createElement("span");
+      text.className = index === 0
+        ? "yamli-anywhere-latin"
+        : "yamli-anywhere-arabic";
+      text.dir = index === 0 ? "ltr" : "rtl";
+      text.textContent = candidate;
 
-      row.append(num, arabic);
+      row.append(num, text);
 
       row.addEventListener("mousedown", event => {
         event.preventDefault();
         event.stopPropagation();
+
         if (STATE.context && contextValid(STATE.context)) {
-          replaceContext(STATE.context, candidate);
+          if (index === 0) {
+            // Keep the original Latin word. The next Space is allowed through.
+            markLatinAsChosen(STATE.context);
+          } else {
+            replaceContext(STATE.context, candidate);
+            STATE.latinBypass = null;
+          }
         }
         hidePopup();
       });
@@ -451,8 +492,13 @@
         }
 
         STATE.context = ctx;
-        STATE.candidates = [...new Set(candidates)];
-        STATE.selectedIndex = 0;
+        // Match the Yamli website: original Latin input first, while the
+        // first Arabic candidate is highlighted by default.
+        STATE.candidates = [
+          ctx.word,
+          ...[...new Set(candidates)].filter(candidate => candidate !== ctx.word)
+        ];
+        STATE.selectedIndex = STATE.candidates.length > 1 ? 1 : 0;
         renderPopup();
         positionPopup(ctx);
         resolve(true);
@@ -493,8 +539,13 @@
     const el = editableFromEvent(event);
     if (!el) return;
 
+    if (STATE.latinBypass && event.key !== " " &&
+        !["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
+      STATE.latinBypass = null;
+    }
+
     if (STATE.popup && !STATE.popup.hidden && STATE.candidates.length && STATE.context) {
-      const count = Math.min(STATE.candidates.length, 9);
+      const count = Math.min(STATE.candidates.length, 10);
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -523,22 +574,26 @@
         event.preventDefault();
         event.stopPropagation();
         if (contextValid(STATE.context)) {
-          replaceContext(
-            STATE.context,
-            STATE.candidates[STATE.selectedIndex]
-          );
+          if (STATE.selectedIndex === 0) {
+            markLatinAsChosen(STATE.context);
+          } else {
+            replaceContext(STATE.context, STATE.candidates[STATE.selectedIndex]);
+            STATE.latinBypass = null;
+          }
         }
         hidePopup();
         return;
       }
 
+      // 1–9 select Arabic candidates. The Latin row is not numbered.
       if (/^[1-9]$/.test(event.key)) {
-        const index = Number(event.key) - 1;
+        const index = Number(event.key);
         if (index < count) {
           event.preventDefault();
           event.stopPropagation();
           if (contextValid(STATE.context)) {
             replaceContext(STATE.context, STATE.candidates[index]);
+            STATE.latinBypass = null;
           }
           hidePopup();
           return;
@@ -549,15 +604,30 @@
         event.preventDefault();
         event.stopPropagation();
         if (contextValid(STATE.context)) {
-          replaceContext(
-            STATE.context,
-            STATE.candidates[STATE.selectedIndex],
-            " "
-          );
+          if (STATE.selectedIndex === 0) {
+            // Explicitly selected Latin: keep it and add the space.
+            replaceContext(STATE.context, STATE.context.word, " ");
+          } else {
+            // Normal Yamli behaviour: first Arabic candidate is selected by default.
+            replaceContext(
+              STATE.context,
+              STATE.candidates[STATE.selectedIndex],
+              " "
+            );
+          }
+          STATE.latinBypass = null;
         }
         hidePopup();
         return;
       }
+    }
+
+    // If the Latin candidate was clicked, let the next Space pass through
+    // normally instead of re-transliterating the same word.
+    if (event.key === " " && !event.shiftKey && latinBypassStillValid(el)) {
+      STATE.latinBypass = null;
+      hidePopup();
+      return;
     }
 
     // Crucial Label Studio / fast-typing fallback:

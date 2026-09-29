@@ -20,7 +20,7 @@ can give:
 سالم
 ```
 
-You can then choose the Arabic word you want.
+The original Latin word is also shown as the first option for code-switching. The first Arabic suggestion is highlighted by default, so pressing **Space** still selects Arabic.
 
 ## Installation
 
@@ -69,7 +69,8 @@ A list of Arabic suggestions should appear.
 
 ## Controls
 
-- **Space** — accept the highlighted suggestion and add a space.
+- **Space** — accept the highlighted suggestion and add a space. The first Arabic suggestion is selected by default.
+- **Latin option** — click the first (Latin) row to keep the word in Latin script for code-switching.
 - **Enter** — accept the highlighted suggestion.
 - **↑ / ↓** — move between suggestions.
 - **1–9** — choose a numbered suggestion.

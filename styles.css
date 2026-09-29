@@ -71,6 +71,14 @@
   font: 400 21px/1.45 Tahoma, Arial, sans-serif !important;
 }
 
+#yamli-anywhere-popup-v2 .yamli-anywhere-latin {
+  flex: 1 !important;
+  direction: ltr !important;
+  text-align: left !important;
+  color: #334155 !important;
+  font: italic 400 16px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
 #yamli-anywhere-toast-v2 {
   position: fixed !important;
   z-index: 2147483647 !important;
