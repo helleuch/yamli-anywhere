@@ -26,12 +26,10 @@
   const WORD_RE = /[A-Za-zÀ-ÖØ-öø-ÿ0-9'’_-]+$/;
   const EXCLUDED_RE = /^(?:https?:|ftp:|www\.|site:|cache:|link:|related:|info:|stocks:)|@/i;
 
-  // Arabic punctuation. Colon and exclamation mark use the same glyphs
-  // as Latin-script text; comma and question mark have Arabic forms.
+  // Only characters whose Arabic glyph differs from the Latin one.
+  // Other punctuation (., :, !) is left to the browser/editor unchanged.
   const PUNCTUATION_MAP = {
     ',': '،',
-    ':': ':',
-    '!': '!',
     '?': '؟'
   };
 
@@ -233,7 +231,6 @@
       try { el.setSelectionRange(caret, caret); } catch (_) {}
 
       fireInput(el, insert);
-      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return true;
     }
 
@@ -255,7 +252,6 @@
       sel.addRange(after);
 
       fireInput(ctx.el, insert);
-      ctx.el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return true;
     }
 
@@ -284,7 +280,6 @@
       try { el.setSelectionRange(caret, caret); } catch (_) {}
 
       fireInput(el, text);
-      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return true;
     }
 
@@ -304,7 +299,6 @@
       sel.addRange(after);
 
       fireInput(el, text);
-      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return true;
     }
 
@@ -370,23 +364,76 @@
 
   function latinBypassStillValid(el) {
     const b = STATE.latinBypass;
-    if (!b || b.el !== el || !b.el?.isConnected) return false;
+    if (!b) return false;
 
-    if (b.kind === "control") {
-      const pos = b.el.selectionStart;
-      return pos === b.end &&
-             b.el.value.slice(b.start, b.end) === b.word;
+    if (b.el === el && b.el?.isConnected) {
+      if (b.kind === "control") {
+        const pos = b.el.selectionStart;
+        if (pos === b.end && b.el.value.slice(b.start, b.end) === b.word) {
+          return true;
+        }
+      }
+
+      if (b.kind === "contenteditable" && b.node?.isConnected &&
+          b.node.textContent.slice(b.start, b.end) === b.word) {
+        return true;
+      }
     }
 
-    if (b.kind === "contenteditable") {
-      return !!b.node?.isConnected &&
-             b.node.textContent.slice(b.start, b.end) === b.word;
+    // Framework editors can recreate the underlying input/text node. Recover
+    // the Latin choice from the word immediately before the current caret.
+    const current = getContext(el);
+    if (current && current.word === b.word) {
+      STATE.latinBypass = {
+        kind: current.kind,
+        el: current.el,
+        node: current.node || null,
+        word: current.word,
+        start: current.start,
+        end: current.end
+      };
+      return true;
     }
 
     return false;
   }
 
+  function restoreEditorFocus(ctx) {
+    if (!ctx?.el?.isConnected) return;
+
+    try {
+      ctx.el.focus({ preventScroll: true });
+    } catch (_) {
+      try { ctx.el.focus(); } catch (_) {}
+    }
+
+    if (ctx.kind === "control") {
+      const caret = Math.min(ctx.end, ctx.el.value.length);
+      try { ctx.el.setSelectionRange(caret, caret); } catch (_) {}
+      return;
+    }
+
+    if (ctx.kind === "contenteditable" && ctx.node?.isConnected) {
+      const caret = Math.min(ctx.end, ctx.node.textContent.length);
+      const range = document.createRange();
+      range.setStart(ctx.node, caret);
+      range.collapse(true);
+      const sel = ctx.el.ownerDocument?.getSelection?.() || window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+  }
+
   function hidePopup() {
+    // Invalidate any Yamli request that was started before the popup was
+    // dismissed. Without this, a late response can reopen the popup after the
+    // user has explicitly chosen the Latin option.
+    STATE.serial += 1;
+    clearTimeout(STATE.debounce);
+    STATE.debounce = null;
+
     STATE.candidates = [];
     STATE.selectedIndex = 0;
     STATE.context = null;
@@ -444,16 +491,15 @@
     STATE.list.replaceChildren();
 
     STATE.candidates.slice(0, 10).forEach((candidate, index) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      // A candidate is deliberately not a <button>: clicking a button can steal
+      // focus from editors such as Label Studio, after which Space no longer
+      // goes into the transcription field.
+      const row = document.createElement("div");
+      row.setAttribute("role", "option");
+      row.tabIndex = -1;
       row.className = "yamli-anywhere-candidate" +
         (index === STATE.selectedIndex ? " selected" : "");
       row.dataset.index = String(index);
-
-      const num = document.createElement("span");
-      num.className = "yamli-anywhere-number";
-      // Latin stays unnumbered; Arabic candidates are numbered 1–9.
-      num.textContent = index === 0 ? "" : String(index);
 
       const text = document.createElement("span");
       text.className = index === 0
@@ -462,22 +508,30 @@
       text.dir = index === 0 ? "ltr" : "rtl";
       text.textContent = candidate;
 
-      row.append(num, text);
+      row.append(text);
 
       row.addEventListener("mousedown", event => {
         event.preventDefault();
         event.stopPropagation();
 
-        if (STATE.context && contextValid(STATE.context)) {
+        const chosenContext = STATE.context;
+        if (chosenContext && contextValid(chosenContext)) {
           if (index === 0) {
-            // Keep the original Latin word. The next Space is allowed through.
-            markLatinAsChosen(STATE.context);
+            // Keep the original Latin word and remember that choice until the
+            // following separator.
+            markLatinAsChosen(chosenContext);
           } else {
-            replaceContext(STATE.context, candidate);
+            replaceContext(chosenContext, candidate);
             STATE.latinBypass = null;
           }
         }
+
         hidePopup();
+
+        // Explicitly put focus/caret back in the editor. This is essential for
+        // Label Studio, where interacting with the popup can otherwise leave
+        // Space routed to the page instead of the transcription field.
+        restoreEditorFocus(chosenContext);
       });
 
       STATE.list.appendChild(row);
@@ -590,10 +644,18 @@
 
   document.addEventListener("keyup", event => {
     if (!STATE.enabled) return;
-    if (["ArrowUp", "ArrowDown", "Enter", "Escape", " "].includes(event.key)) return;
+
+    // input/beforeinput already handle word terminators and navigation keys.
+    if (["ArrowUp", "ArrowDown", "Enter", "Escape", " ", ",", "?"].includes(event.key)) {
+      return;
+    }
+
     const el = editableFromEvent(event);
     if (!el) return;
-    // Some framework editors swallow/replace input events; keyup is a fallback.
+
+    // Fallback for framework editors that do not reliably expose input events.
+    // Number keys are deliberately treated like ordinary characters so Arabizi
+    // such as 3, 5, 6, 7, 8 and 9 works normally.
     scheduleCandidates(el);
   }, true);
 
@@ -602,174 +664,160 @@
     const el = editableFromEvent(event);
     if (!el) return;
 
-    const mappedPunctuation = (!event.ctrlKey && !event.altKey && !event.metaKey)
-      ? PUNCTUATION_MAP[event.key]
-      : undefined;
+    const isWordTerminator = event.key === " " ||
+      Object.prototype.hasOwnProperty.call(PUNCTUATION_MAP, event.key);
 
-    if (STATE.latinBypass && event.key !== " " && !mappedPunctuation &&
-        !["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
-      STATE.latinBypass = null;
-    }
+    // After the user explicitly chooses the Latin row, Space must always
+    // behave like an ordinary word separator. Do this synchronously here,
+    // before Label Studio/page shortcuts get a chance to consume the key.
+    // There is deliberately no Yamli request on this path.
+    if (event.key === " " && STATE.latinBypass && latinBypassStillValid(el)) {
+      const inserted = insertTextAtCaret(el, " ");
 
-    if (STATE.popup && !STATE.popup.hidden && STATE.candidates.length && STATE.context) {
-      const count = Math.min(STATE.candidates.length, 10);
-
-      if (event.key === "ArrowDown") {
+      if (inserted) {
         event.preventDefault();
-        event.stopPropagation();
-        STATE.selectedIndex = (STATE.selectedIndex + 1) % count;
-        renderPopup();
-        return;
-      }
+        event.stopImmediatePropagation();
 
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        STATE.selectedIndex = (STATE.selectedIndex - 1 + count) % count;
-        renderPopup();
-        return;
-      }
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        hidePopup();
-        return;
-      }
-
-      if (event.key === "Enter") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (contextValid(STATE.context)) {
-          if (STATE.selectedIndex === 0) {
-            markLatinAsChosen(STATE.context);
-          } else {
-            replaceContext(STATE.context, STATE.candidates[STATE.selectedIndex]);
-            STATE.latinBypass = null;
-          }
-        }
-        hidePopup();
-        return;
-      }
-
-      // 1–9 select Arabic candidates. The Latin row is not numbered.
-      if (/^[1-9]$/.test(event.key)) {
-        const index = Number(event.key);
-        if (index < count) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (contextValid(STATE.context)) {
-            replaceContext(STATE.context, STATE.candidates[index]);
-            STATE.latinBypass = null;
-          }
-          hidePopup();
-          return;
-        }
-      }
-
-      if (mappedPunctuation) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (contextValid(STATE.context)) {
-          if (STATE.selectedIndex === 0) {
-            // Latin candidate selected: keep the Latin word but use Arabic punctuation.
-            replaceContext(STATE.context, STATE.context.word, mappedPunctuation);
-          } else {
-            replaceContext(
-              STATE.context,
-              STATE.candidates[STATE.selectedIndex],
-              mappedPunctuation
-            );
-          }
-          STATE.latinBypass = null;
-        }
-        hidePopup();
-        return;
-      }
-
-      if (event.key === " " && !event.shiftKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (contextValid(STATE.context)) {
-          if (STATE.selectedIndex === 0) {
-            // Explicitly selected Latin: keep it and add the space.
-            replaceContext(STATE.context, STATE.context.word, " ");
-          } else {
-            // Normal Yamli behaviour: first Arabic candidate is selected by default.
-            replaceContext(
-              STATE.context,
-              STATE.candidates[STATE.selectedIndex],
-              " "
-            );
-          }
-          STATE.latinBypass = null;
-        }
-        hidePopup();
-        return;
-      }
-    }
-
-    // Punctuation behaves like a word terminator. If a Latin/Arabizi word is
-    // still active, transliterate it first and append Arabic punctuation.
-    if (mappedPunctuation) {
-      event.preventDefault();
-      event.stopPropagation();
-
-      // If the user explicitly chose the Latin candidate, keep that word Latin.
-      if (latinBypassStillValid(el)) {
-        const ctx = STATE.latinBypass;
         STATE.latinBypass = null;
-        replaceContext(ctx, ctx.word, mappedPunctuation);
         hidePopup();
-        return;
       }
 
-      const ctx = getContext(el);
-      if (ctx) {
-        requestCandidates(ctx, { commitSuffix: mappedPunctuation }).then(committed => {
-          if (!committed && contextValid(ctx)) {
-            // If Yamli is unavailable, preserve what the user typed and still
-            // convert the punctuation.
-            replaceContext(ctx, ctx.word, mappedPunctuation);
-          }
-        });
-      } else {
-        // The preceding text is already Arabic (or there is no word), so only
-        // insert/convert the punctuation at the current caret position.
-        insertTextAtCaret(el, mappedPunctuation);
-      }
       return;
     }
 
-    // If the Latin candidate was clicked, let the next Space pass through
-    // normally instead of re-transliterating the same word.
-    if (event.key === " " && !event.shiftKey && latinBypassStillValid(el)) {
+    // A Latin choice remains committed until the user ends that word with a
+    // space/punctuation. If they continue typing the word, allow Yamli to start
+    // considering the expanded word again.
+    if (STATE.latinBypass && !isWordTerminator &&
+        !["Shift", "Control", "Alt", "Meta"].includes(event.key) &&
+        !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape"].includes(event.key)) {
+      STATE.latinBypass = null;
+    }
+
+    if (!(STATE.popup && !STATE.popup.hidden && STATE.candidates.length && STATE.context)) {
+      return;
+    }
+
+    const count = Math.min(STATE.candidates.length, 10);
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      STATE.selectedIndex = (STATE.selectedIndex + 1) % count;
+      renderPopup();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      STATE.selectedIndex = (STATE.selectedIndex - 1 + count) % count;
+      renderPopup();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hidePopup();
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (contextValid(STATE.context)) {
+        if (STATE.selectedIndex === 0) {
+          // Keep the original Latin word. Space/punctuation will commit it.
+          markLatinAsChosen(STATE.context);
+        } else {
+          replaceContext(STATE.context, STATE.candidates[STATE.selectedIndex]);
+          STATE.latinBypass = null;
+        }
+      }
+
+      hidePopup();
+    }
+
+    // IMPORTANT: number keys are intentionally not intercepted here.
+    // They must reach the editor as ordinary characters for Arabizi.
+  }, true);
+
+  document.addEventListener("beforeinput", event => {
+    if (!STATE.enabled || event.isComposing) return;
+    if (event.inputType && event.inputType !== "insertText") return;
+
+    const el = editableFromEvent(event);
+    if (!el) return;
+
+    const typed = typeof event.data === "string" ? event.data : "";
+    const isSpace = typed === " ";
+    const hasArabicPunctuation = Object.prototype.hasOwnProperty.call(PUNCTUATION_MAP, typed);
+
+    if (!isSpace && !hasArabicPunctuation) return;
+
+    // IMPORTANT: never cancel a normal Space while waiting for the network.
+    // Losing a separator is much worse than missing one transliteration. We
+    // only intercept Space when we already have a visible candidate to commit.
+
+    // 1) The user explicitly chose the Latin row. The word is already exactly
+    // as they want it, so Space must be allowed through natively. For Arabic
+    // comma/question mark we only replace the punctuation character itself.
+    if (latinBypassStillValid(el)) {
+      STATE.latinBypass = null;
+      hidePopup();
+
+      if (isSpace) {
+        // Do not preventDefault(): the editor inserts one ordinary space.
+        return;
+      }
+
+      if (!event.cancelable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      insertTextAtCaret(el, PUNCTUATION_MAP[typed]);
+      return;
+    }
+
+    // 2) If Yamli candidates are already visible, committing is synchronous:
+    // replace the current word with the highlighted choice and append the
+    // separator exactly once.
+    if (STATE.popup && !STATE.popup.hidden && STATE.candidates.length &&
+        STATE.context && contextValid(STATE.context)) {
+      if (!event.cancelable) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const suffix = isSpace ? " " : PUNCTUATION_MAP[typed];
+      const replacement = STATE.selectedIndex === 0
+        ? STATE.context.word
+        : STATE.candidates[STATE.selectedIndex];
+
+      replaceContext(STATE.context, replacement, suffix);
       STATE.latinBypass = null;
       hidePopup();
       return;
     }
 
-    // Crucial Label Studio / fast-typing fallback:
-    // if the user hits Space before the popup request has finished,
-    // hold the Space briefly and ask Yamli immediately.
-    if (event.key === " " && !event.shiftKey) {
-      const ctx = getContext(el);
-      if (ctx) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        requestCandidates(ctx, { commitSpace: true }).then(committed => {
-          if (!committed) {
-            // Yamli failed or had no candidate: do not eat the user's space.
-            if (ctx.kind === "control") {
-              if (contextValid(ctx)) replaceContext(ctx, ctx.word, " ");
-            } else if (ctx.kind === "contenteditable" && contextValid(ctx)) {
-              replaceContext(ctx, ctx.word, " ");
-            }
-          }
-        });
-      }
+    // 3) No ready candidate: Space remains a completely normal editor action.
+    // We deliberately do NOT cancel it and then wait for an asynchronous Yamli
+    // response; that was the cause of spaces being swallowed in v0.3.3.
+    if (isSpace) {
+      STATE.latinBypass = null;
+      hidePopup();
+      return;
     }
+
+    // 4) Arabic comma/question mark can be converted synchronously even when
+    // there is no candidate popup. If beforeinput cannot be cancelled, leave
+    // the browser/editor untouched rather than risk double insertion.
+    if (!event.cancelable) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    insertTextAtCaret(el, PUNCTUATION_MAP[typed]);
   }, true);
 
   document.addEventListener("mousedown", event => {
