@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- Added Arabic punctuation conversion: `,` → `،` and `?` → `؟`.
+- `:` and `!` are supported as punctuation terminators and keep their standard glyphs.
+- Typing punctuation now commits the current Yamli candidate, e.g. `salam?` → `سلام؟`.
+
 ## 0.3.1
 
 - Added the original Latin input as the first candidate, matching Yamli's code-switching workflow.

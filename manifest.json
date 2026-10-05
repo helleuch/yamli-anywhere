@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yamli Anywhere",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Smart Arabic transliteration in text fields, including annotation tools such as Label Studio.",
   "permissions": [
     "storage",

@@ -26,6 +26,15 @@
   const WORD_RE = /[A-Za-zÀ-ÖØ-öø-ÿ0-9'’_-]+$/;
   const EXCLUDED_RE = /^(?:https?:|ftp:|www\.|site:|cache:|link:|related:|info:|stocks:)|@/i;
 
+  // Arabic punctuation. Colon and exclamation mark use the same glyphs
+  // as Latin-script text; comma and question mark have Arabic forms.
+  const PUNCTUATION_MAP = {
+    ',': '،',
+    ':': ':',
+    '!': '!',
+    '?': '؟'
+  };
+
   function pageInfo() {
     try {
       return {
@@ -253,6 +262,55 @@
     return false;
   }
 
+  function insertTextAtCaret(el, text) {
+    if (!el || !text) return false;
+
+    if (isTextControl(el)) {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      if (typeof start !== "number" || typeof end !== "number") return false;
+
+      const old = el.value;
+      const proto = el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      const next = old.slice(0, start) + text + old.slice(end);
+
+      if (setter) setter.call(el, next);
+      else el.value = next;
+
+      const caret = start + text.length;
+      try { el.setSelectionRange(caret, caret); } catch (_) {}
+
+      fireInput(el, text);
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return true;
+    }
+
+    if (el.isContentEditable || el.getAttribute?.("role") === "textbox") {
+      const sel = el.ownerDocument?.getSelection?.() || window.getSelection();
+      if (!sel || !sel.rangeCount) return false;
+
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const inserted = document.createTextNode(text);
+      range.insertNode(inserted);
+
+      const after = document.createRange();
+      after.setStart(inserted, inserted.textContent.length);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+
+      fireInput(el, text);
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return true;
+    }
+
+    return false;
+  }
+
   function ensureUI() {
     if (!document.documentElement) return;
 
@@ -428,7 +486,7 @@
     STATE.popup.hidden = !STATE.candidates.length;
   }
 
-  async function requestCandidates(ctx, { commitSpace = false } = {}) {
+  async function requestCandidates(ctx, { commitSpace = false, commitSuffix = null } = {}) {
     if (!STATE.enabled || !ctx?.word) return false;
 
     const serial = ++STATE.serial;
@@ -474,10 +532,15 @@
           return;
         }
 
-        // If this was triggered by Space, commit the best result immediately.
-        if (commitSpace) {
+        // Space and punctuation can commit the best result immediately.
+        const immediateSuffix = commitSuffix !== null
+          ? commitSuffix
+          : (commitSpace ? " " : null);
+
+        if (immediateSuffix !== null) {
           if (contextValid(ctx)) {
-            replaceContext(ctx, candidates[0], " ");
+            replaceContext(ctx, candidates[0], immediateSuffix);
+            STATE.latinBypass = null;
             hidePopup();
             resolve(true);
             return;
@@ -539,7 +602,11 @@
     const el = editableFromEvent(event);
     if (!el) return;
 
-    if (STATE.latinBypass && event.key !== " " &&
+    const mappedPunctuation = (!event.ctrlKey && !event.altKey && !event.metaKey)
+      ? PUNCTUATION_MAP[event.key]
+      : undefined;
+
+    if (STATE.latinBypass && event.key !== " " && !mappedPunctuation &&
         !["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
       STATE.latinBypass = null;
     }
@@ -600,6 +667,26 @@
         }
       }
 
+      if (mappedPunctuation) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (contextValid(STATE.context)) {
+          if (STATE.selectedIndex === 0) {
+            // Latin candidate selected: keep the Latin word but use Arabic punctuation.
+            replaceContext(STATE.context, STATE.context.word, mappedPunctuation);
+          } else {
+            replaceContext(
+              STATE.context,
+              STATE.candidates[STATE.selectedIndex],
+              mappedPunctuation
+            );
+          }
+          STATE.latinBypass = null;
+        }
+        hidePopup();
+        return;
+      }
+
       if (event.key === " " && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
@@ -620,6 +707,38 @@
         hidePopup();
         return;
       }
+    }
+
+    // Punctuation behaves like a word terminator. If a Latin/Arabizi word is
+    // still active, transliterate it first and append Arabic punctuation.
+    if (mappedPunctuation) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      // If the user explicitly chose the Latin candidate, keep that word Latin.
+      if (latinBypassStillValid(el)) {
+        const ctx = STATE.latinBypass;
+        STATE.latinBypass = null;
+        replaceContext(ctx, ctx.word, mappedPunctuation);
+        hidePopup();
+        return;
+      }
+
+      const ctx = getContext(el);
+      if (ctx) {
+        requestCandidates(ctx, { commitSuffix: mappedPunctuation }).then(committed => {
+          if (!committed && contextValid(ctx)) {
+            // If Yamli is unavailable, preserve what the user typed and still
+            // convert the punctuation.
+            replaceContext(ctx, ctx.word, mappedPunctuation);
+          }
+        });
+      } else {
+        // The preceding text is already Arabic (or there is no word), so only
+        // insert/convert the punctuation at the current caret position.
+        insertTextAtCaret(el, mappedPunctuation);
+      }
+      return;
     }
 
     // If the Latin candidate was clicked, let the next Space pass through
